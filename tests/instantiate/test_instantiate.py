@@ -1,5 +1,6 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import copy
+import pickle
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -41,6 +42,7 @@ from tests.instantiate import (
     UntypedPassthroughConf,
     User,
     recisinstance,
+    ArgsClass,
 )
 
 
@@ -321,6 +323,18 @@ def test_instantiate_adam(instantiate_func: Any, config: Any) -> None:
     adam_params = Parameters([1, 2, 3])
     res = instantiate_func(config, params=adam_params)
     assert res == Adam(params=adam_params)
+
+
+def test_regression_1483(instantiate_func: Any) -> None:
+    def gen() -> Any:
+        yield 10
+
+    res: ArgsClass = instantiate_func(
+        {"_target_": "tests.instantiate.ArgsClass"},
+        gen=gen(),
+        lst=[1, 2],
+    )
+    pickle.dumps(res.kwargs["lst"])
 
 
 def test_instantiate_adam_conf(instantiate_func: Any) -> None:
