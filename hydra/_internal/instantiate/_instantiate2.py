@@ -5,7 +5,7 @@ import sys
 from enum import Enum
 from typing import Any, Callable, Sequence, Tuple, Union
 
-from omegaconf import OmegaConf, SCMode
+from omegaconf import DictConfig, OmegaConf, SCMode, ValueNode
 from omegaconf._utils import is_structured_config
 
 from hydra._internal.utils import _locate
@@ -45,10 +45,38 @@ def _extract_pos_args(*input_args: Any, **kwargs: Any) -> Tuple[Any, Any]:
     return output_args, kwargs
 
 
+# TODO: move to OmegaConf.resolve()
+def _resolve(cfg: Any) -> Any:
+    if isinstance(cfg, DictConfig):
+        for k in cfg.keys():
+            node = cfg._get_node(k)
+            cfg[k] = _resolve(node)
+
+    elif OmegaConf.is_list(cfg):
+        for i in range(len(cfg)):
+            node = cfg._get_node(i)
+            cfg[i] = _resolve(node)
+
+    elif isinstance(cfg, ValueNode):
+        cfg = cfg._dereference_node()
+
+    return cfg
+
+
 def _call_target(target: Callable, *args, **kwargs) -> Any:  # type: ignore
     """Call target (type) with args and kwargs."""
     try:
         args, kwargs = _extract_pos_args(*args, **kwargs)
+        # resolve and sanitize args and kwargs
+        for arg in args:
+            if OmegaConf.is_config(arg):
+                _resolve(arg)
+                arg._set_parent(None)
+        for v in kwargs.values():
+            if OmegaConf.is_config(v):
+                _resolve(v)
+                v._set_parent(None)
+
         return target(*args, **kwargs)
     except Exception as e:
         raise type(e)(

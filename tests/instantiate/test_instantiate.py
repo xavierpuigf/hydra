@@ -9,6 +9,7 @@ from omegaconf import MISSING, DictConfig, ListConfig, OmegaConf
 from pytest import fixture, mark, param, raises, warns
 
 import hydra
+from hydra._internal.instantiate._instantiate2 import _resolve
 from hydra.errors import InstantiationException
 from hydra.types import ConvertMode, TargetConf
 from tests.instantiate import (
@@ -276,37 +277,17 @@ def test_interpolation_accessing_parent(
     assert input_conf == cfg_copy
 
 
-def test_interpolation_is_live_in_instantiated_object(instantiate_func: Any) -> None:
-    """
-    Interpolations in instantiated objects are live config objects but not for primitive objects.
-    """
-    cfg = OmegaConf.create(
-        {
-            "node": {
-                "_target_": "tests.instantiate.AClass",
-                "a": "${value}",
-                "b": {"x": "${value}"},
-                "c": 30,
-                "d": 40,
-            },
-            "value": 99,
-        }
-    )
-    obj = instantiate_func(cfg.node)
-    assert obj.a == 99
-    assert obj.b.x == 99
-
-    cfg.value = 3.14
-
-    # interpolation is not live for primitive objects
-    assert obj.a == 99  # unchanged
-    # but is live for config objects
-    assert obj.b.x == 3.14
-
-
 @mark.parametrize(
     "src",
-    [({"_target_": "tests.instantiate.AClass", "b": 200, "c": {"x": 10, "y": "${b}"}})],
+    [
+        (
+            {
+                "_target_": "tests.instantiate.AClass",
+                "b": 200,
+                "c": {"x": 10, "y": "${b}"},
+            }
+        )
+    ],
 )
 def test_class_instantiate_omegaconf_node(instantiate_func: Any, config: Any) -> Any:
     obj = instantiate_func(config, a=10, d=AnotherClass(99))
@@ -326,6 +307,13 @@ def test_instantiate_adam(instantiate_func: Any, config: Any) -> None:
 
 
 def test_regression_1483(instantiate_func: Any) -> None:
+    """
+    In 1483, pickle is failing because the parent node of lst node contains
+    a generator, which is not picklable.
+    The solution is to resolve and retach from the parent before calling the function.
+    This tests verifies the expected behavior.
+    """
+
     def gen() -> Any:
         yield 10
 
@@ -1338,3 +1326,24 @@ def test_dict_as_none(instantiate_func: Any) -> None:
     cfg = OmegaConf.structured(DictValuesConf)
     obj = instantiate_func(config=cfg)
     assert obj.d is None
+
+
+@mark.parametrize(
+    "cfg",
+    [
+        # dict
+        param({}, id="dict"),
+        param({"a": 10, "b": "${a}"}, id="dict"),
+        param({"a": 10, "b": {"a": "${a}"}}, id="dict"),
+        param({"a": "${b.a}", "b": {"a": "10"}}, id="dict"),
+        # lists
+        param([], id="list"),
+        param([10, "${0}"], id="list"),
+    ],
+)
+def test_resolve(cfg: Any) -> None:
+    cfg = OmegaConf.create(cfg)
+    expected_plain = OmegaConf.to_container(cfg, resolve=True)
+    resolved_oc = _resolve(cfg)
+    resolved_plain = OmegaConf.to_container(resolved_oc, resolve=False)
+    assert resolved_plain == expected_plain
